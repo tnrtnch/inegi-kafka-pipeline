@@ -1,0 +1,15 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Selenium logs or driver files
+*.log
+
+# Virtual environment
+venv/
+.env/
+
+# System files
+.DS_Store
+Thumbs.db

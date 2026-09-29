@@ -1,0 +1,3 @@
+target_url: "https://www3.inegi.org.mx/sistemas/ci/relps/"
+search_query: "Ver total de proveedores sancionados"
+output_file: "sanctions.json"

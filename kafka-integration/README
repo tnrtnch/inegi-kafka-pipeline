@@ -1,0 +1,122 @@
+# inegi-selenium-scrapy → Kafka → PostgreSQL Integration
+
+The files in this folder add a Kafka + PostgreSQL layer on top of the
+existing `inegi-selenium-scrapy` project, without modifying its core
+scraping logic.
+
+## Architecture
+
+```
+Selenium/Scrapy spider  --(on each item found)-->  Kafka topic (inegi-sanctions)
+                                                            |
+                                                            v
+                                         postgres_consumer.py (separate process)
+                                                            |
+                                                            v
+                                              PostgreSQL "sanctions" table
+```
+
+The scraper no longer knows anything about PostgreSQL -- it only
+writes to Kafka. Writing to PostgreSQL is handled entirely by a
+separate process (`postgres_consumer.py`). This is a concrete example
+of **decoupling**: the two sides run independently, without blocking
+each other.
+
+## Step 1 — Add the Kafka pipeline to your project
+
+Paste the `KafkaSanctionsPipeline` class into the **end** of your
+project's `inegi/pipelines.py`. Don't remove the existing JSON
+pipeline (`InegiPipeline`) -- both run side by side.
+
+## Step 2 — Update settings.py
+
+Add the `ITEM_PIPELINES` block to your `inegi/settings.py`:
+
+```python
+ITEM_PIPELINES = {
+    "inegi.pipelines.KafkaSanctionsPipeline": 300,
+    "inegi.pipelines.InegiPipeline": 400,
+}
+```
+
+## Step 3 — Start the infrastructure and create the Kafka topic
+
+Start Kafka, Kafka UI, and PostgreSQL (defined in the root
+`docker-compose.yml`):
+
+```bash
+docker compose up -d
+```
+
+Create the topic:
+
+```bash
+docker exec -it kafka /opt/kafka/bin/kafka-topics.sh --create \
+  --topic inegi-sanctions \
+  --bootstrap-server localhost:9092 \
+  --partitions 3 --replication-factor 1
+```
+
+## Step 4 — PostgreSQL connection
+
+PostgreSQL runs as a Docker service (see root `docker-compose.yml`),
+exposed on **port 5433** on the host (mapped to 5432 inside the
+container, to avoid clashing with any other local PostgreSQL
+instance).
+
+`postgres_consumer.py` reads its connection settings from environment
+variables, falling back to local defaults:
+
+| Variable      | Default     |
+|---------------|-------------|
+| `PG_HOST`     | `localhost` |
+| `PG_PORT`     | `5433`      |
+| `PG_DBNAME`   | `inegi`     |
+| `PG_USER`     | `postgres`  |
+| `PG_PASSWORD` | `postgres`  |
+
+The script creates the `sanctions` table itself on first run
+(`CREATE TABLE IF NOT EXISTS`) -- no manual table setup needed.
+
+## Step 5 — Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+## Step 6 — Run
+
+**Terminal 1 — start the consumer (open this first, it keeps listening):**
+```bash
+python postgres_consumer.py
+```
+
+**Terminal 2 — run the scraper:**
+```bash
+python main.py
+```
+
+As the scraper finds each `Entity_name`, it sends it to Kafka;
+`postgres_consumer.py` picks it up immediately and writes it to
+PostgreSQL. Terminal 1 prints a `Written to PostgreSQL -> ...` line
+for each write.
+
+## Verify
+
+```bash
+docker exec -it postgres psql -U postgres -d inegi -c "SELECT * FROM sanctions ORDER BY updated_at DESC LIMIT 10;"
+```
+
+## Why this architecture works
+
+- If the scraper crashes or slows down, writing to PostgreSQL isn't
+  affected -- Kafka keeps holding the messages, and the consumer picks
+  up where it left off once it's back.
+- Using `entity_name` as the message key means updates for the same
+  supplier always land on the same partition -- ordering is preserved,
+  reducing race-condition risk.
+- If you later want to add another consumer alongside PostgreSQL (for
+  example, indexing into Elasticsearch, or sending a Slack
+  notification), you don't touch the scraper code at all -- you just
+  write a new consumer script. That's the real power of a decoupled
+  architecture.

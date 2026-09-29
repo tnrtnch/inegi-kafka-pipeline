@@ -1,0 +1,76 @@
+name: Run INEGI Scraper
+
+on:
+  schedule:
+    - cron: "0 0 * * *"    # Daily autorun
+  workflow_dispatch:       # For manuel run
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run scraper (headless)
+        run: |
+          python main.py
+
+      - name: List output
+        run: |
+          ls -l sanctions.json || echo "sanctions.json not found!"
+
+
+      - name: Commit & Push sanctions.json (always)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add sanctions.json
+          git diff --cached --quiet || git commit -m "Auto update sanctions.json [$(date -u +'%Y-%m-%d %H:%M UTC')]"
+          
+          git push origin main
+
+
+      - name: Send email on failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.EMAIL_USER }}
+          password: ${{ secrets.EMAIL_PASS }}
+          subject: "🚨 Scraper FAILED - ${{ github.repository }}"
+          to: yourmail@gmail.com
+          from: GitHub Actions
+          body: |
+            Repository: ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Run ID: ${{ github.run_id }}
+            Check logs in GitHub Actions.
+
+            
+      - name: TEST MAIL (manual trigger only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.EMAIL_USER }}
+          password: ${{ secrets.EMAIL_PASS }}
+          subject: "✅ TEST: INEGI Mail Alert Working"
+          to: taner9321@email.com
+          from: INEGI Test Bot
+          body: |
+            This is a TEST email.
+            GitHub Actions mail integration is working correctly.
